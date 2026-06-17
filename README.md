@@ -20,6 +20,8 @@
   
 # Выполнение
 
+## Этап 1
+
 первый шаг это поднять три кассандры по условию
 
   1. Разверните кластер из 3-х узлов (cassandra-1, cassandra-2, cassandra-3). Выберите RF=3.
@@ -95,7 +97,6 @@ CREATE TABLE lab4.leaderboard (
 `game_id` - partition key. Все строки с одинаковым `game_id` будут храниться на одном узле (реплицируемом)
 
 ### 2.2
-
 
 засидим бд
 ```bash
@@ -267,13 +268,15 @@ CAP:
 - CL=ONE - AP
 - CL=QUORUM - CP
 
-# 2.4
+### 2.4
 
 В одно-дата-центровом кластере `LOCAL_ONE` и `ONE` работают одинаково, в multi-DC конфигурациях:
 - `ONE` - может прочитать с любого узла в любом дата-центре
 - `LOCAL_ONE` - читает только с узла в локальном дата-центре
 
-# Этап 3
+## Этап 3
+
+### 3.1
 
 создадим таблицу 
 ```cql
@@ -290,6 +293,8 @@ ALTER TABLE lab4.compaction_test WITH compaction = {
 };
 ```
 min_threshold = 10000, он точно не сразу сработает
+
+### 3.2
 
 потом вызываем запись и флашим на диск изменения
 
@@ -323,6 +328,8 @@ docker exec cassandra-1 bash -c 'ls /var/lib/cassandra/data/lab4/compaction_test
 (1 rows)
 ```
 
+### 3.3
+
 теперь делаем compaction:
 
 ```bash
@@ -344,4 +351,66 @@ docker exec cassandra-1 bash -c 'ls /var/lib/cassandra/data/lab4/compaction_test
 (1 rows)
 ```
 
-# Этап 4
+## Этап 4
+
+### 4.1
+
+запуская ./scripts/stress_test_hot_spot.sh
+
+```bash
+#!/usr/bin/env bash
+
+for i in $(seq 1 100); do
+  docker exec -i cassandra-1 cqlsh \
+    -e "INSERT INTO lab4.leaderboard (game_id, player_id, score)
+        VALUES ('world_cup', 'player_$i', $((RANDOM % 1000)));" &
+done
+```
+
+можно в lazydocker увидеть
+
+| Status | Name | CPU |
+|--------|------|-----|
+| running (healthy) | cassandra-1 | 71.54% |
+| running (healthy) | cassandra-2 | 0.46% |
+| running (healthy) | cassandra-3 | 0.42% |
+
+слишком большая нагрузка на первый узел
+
+### 4.2
+
+
+создадим таблицу с композитным PK
+
+```bash
+docker exec -i cassandra-1 cqlsh -e "
+CREATE TABLE lab4.leaderboard_v2 (
+  game_id text,
+  player_id text,
+  score int,
+  PRIMARY KEY ((game_id, player_id))
+);"
+
+```
+
+hash('world_cup') vs hash('world_cup:player_1')
+
+### 4.3
+
+в первой версии:
+```bash
+❯ ./scripts/stress_test_hot_spot_v1.sh
+172.21.0.3
+```
+совпадает с примари реплика
+
+во второй версии
+```bash
+❯ ./scripts/stress_test_hot_spot_v2.sh
+172.21.0.4
+172.21.0.3
+172.21.0.3
+172.21.0.4
+172.21.0.2
+```
+рандом
