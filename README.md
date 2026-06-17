@@ -272,3 +272,76 @@ CAP:
 В одно-дата-центровом кластере `LOCAL_ONE` и `ONE` работают одинаково, в multi-DC конфигурациях:
 - `ONE` - может прочитать с любого узла в любом дата-центре
 - `LOCAL_ONE` - читает только с узла в локальном дата-центре
+
+# Этап 3
+
+создадим таблицу 
+```cql
+CREATE TABLE lab4.compaction_test (
+  game_id text,
+  player_id text,
+  score int,
+  PRIMARY KEY (game_id)
+);
+ALTER TABLE lab4.compaction_test WITH compaction = {
+  'class': 'SizeTieredCompactionStrategy',
+  'min_threshold': 10000,
+  'max_threshold': 10000
+};
+```
+min_threshold = 10000, он точно не сразу сработает
+
+потом вызываем запись и флашим на диск изменения
+
+```bash
+docker exec -i cassandra-1 bash << 'SCRIPT'
+for i in $(seq 1 100); do
+  cqlsh -e "INSERT INTO lab4.compaction_test (game_id, player_id, score) VALUES ('game_triple_t', 'player_$i', $i);"
+  nodetool flush lab4 compaction_test
+  echo "$i/100"
+done
+SCRIPT
+```
+
+теперь смотрим сколько создалось файлов:
+
+```bash
+docker exec cassandra-1 bash -c 'ls /var/lib/cassandra/data/lab4/compaction_test-*/*-Data.db | wc -l'
+230
+```
+
+хотя у нас всего одна строка:
+
+```bash
+~/dev/distributed-databases/distributed-databases-lab4 main* 2m 22s
+❯ docker exec -it cassandra-1 cqlsh -e 'select * from lab4.compaction_test;'
+
+ game_id       | player_id  | score
+---------------+------------+-------
+ game_triple_t | player_100 |   100
+
+(1 rows)
+```
+
+теперь делаем compaction:
+
+```bash
+❯ docker exec cassandra-1 bash -c 'nodetool compact lab4 compaction_test'
+
+❯ docker exec cassandra-1 bash -c 'ls /var/lib/cassandra/data/lab4/compaction_test-*/*-Data.db | wc -l'
+1
+```
+
+данные не изменились:
+
+```bash
+❯ docker exec -it cassandra-1 cqlsh -e 'select * from lab4.compaction_test;'
+
+ game_id       | player_id  | score
+---------------+------------+-------
+ game_triple_t | player_100 |   100
+
+(1 rows)
+```
+
+# Этап 4
